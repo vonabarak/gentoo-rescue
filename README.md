@@ -1,30 +1,50 @@
 # Gentoo rescue USB image
 
+## Downloads
+
+- Full USB image ([gentoo-rescue.raw](https://gentoo-rescue.v7k.me/gentoo-rescue.raw)) and its [SHA-256 checksum](https://gentoo-rescue.v7k.me/gentoo-rescue.raw.sha256)
+- Offline updates ([vmlinuz](https://gentoo-rescue.v7k.me/vmlinuz), [initramfs.img](https://gentoo-rescue.v7k.me/initramfs.img), and [root.squashfs](https://gentoo-rescue.v7k.me/root.squashfs)) and their [SHA256SUMS manifest](https://gentoo-rescue.v7k.me/SHA256SUMS)
+
+Browse all files in the [public download directory](https://gentoo-rescue.v7k.me/).
+
+## Build
+
 Build and publish the 2 GiB raw disk and its runtime template:
 
 ```sh
-make image IMAGE=gentoo-rescue
-make image-check IMAGE=gentoo-rescue
+make build
+make check
 ```
+
+Install [Corvus](https://github.com/vonabarak/corvus) with the Python client
+and image builder, and use a Python environment with that distribution installed. The Gentoo ebuild enables
+these modules with the `python` USE flag. For a binary release, install the
+bundled wheel, put `crv` on PATH, and set `CORVUS_SHARE_DIR` to the extracted
+release root. The default is `/usr/share/corvus`. The dependency recipes also
+use Bash, jq, and curl. The Corvus host needs the `corvus` network, registered
+`ovmf-code` and `ovmf-vars` images, and a writable `GENTOO_CACHE_DIR` for
+virtiofs. Use `PYTHON=/absolute/path/to/python` to select the interpreter.
 
 The build reports the compressed root filesystem size and available ext4 space.
 First writable boot expands storage to the USB stick's capacity.
 
-Normal rescue builds default to `IMAGE_POLICY=update`, skipping unchanged recipes
-and dependencies. When a build runs, it synchronizes the Gentoo Portage tree and
+Rescue builds reuse the registered `gentoo-glibc-systemd-builder-cloudinit:latest`
+image. If it is missing, the Makefile runs Corvus’s installed YAML recipes to
+create it. Rescue builds default to `IMAGE_POLICY=update`, skipping publication
+when the rescue recipe is unchanged. When a build runs, it synchronizes the Gentoo Portage tree and
 selects current unmasked **stable amd64** packages with the stable systemd profile.
 Publication creates a new version and moves `latest`, preserving existing versions
 and users. Remote Portage changes alone do not trigger a build; use
 `IMAGE_POLICY=overwrite` to force a refresh. Explicit policy overrides still work.
-`make image-ensure IMAGE=gentoo-rescue` only fills missing outputs; it does not
-refresh an existing image. `make image-rebuild IMAGE=gentoo-rescue` forces the
-whole dependency chain. Compatible package caches speed up installation; packages
+`make ensure` fills missing rescue outputs. `make rebuild` forces publication
+of the rescue image using the registered builder, creating the builder only
+if it is missing. Compatible package caches speed up installation; packages
 may be compiled from source when the selected version is unavailable as a binary.
 
 Rescue uses the shared Gentoo Portage verification library for signed repository
 snapshots, repository metadata, and downloaded binary packages. The common
 `GENTOO_KEYSERVER` option selects the HKPS repository key refresh endpoint;
-see [Portage verification](README.md#portage-verification). Unsigned locally built
+see the Portage verification section in the Corvus image guide. Unsigned locally built
 packages remain usable in the trusted shared cache.
 
 The registered glibc/systemd builder provides native tools and caches. Rescue
@@ -165,7 +185,7 @@ Run this command with the Corvus Python client installed in the selected Python
 environment and with access to the Corvus daemon.
 
 ```sh
-make -C yaml/gentoo export IMAGE=rescue
+make export
 ```
 
 Use `PYTHON=/absolute/path/to/python` to select an environment.
@@ -177,74 +197,69 @@ and be able to instantiate the `gentoo-musl-openrc-headless` template.
 The exporter attaches the rescue image read-only to a temporary VM, downloads
 and verifies the four files, and deletes the VM. It writes `vmlinuz`,
 `initramfs.img`, `root.squashfs`, and `SHA256SUMS` to
-`yaml/gentoo/build/gentoo-rescue/`. Set `OUTPUT_DIR=/absolute/path` to
+`build/gentoo-rescue/`. Set `OUTPUT_DIR=/absolute/path` to
 override the destination.
+
+## Publish public downloads
+
+Run `make upload` on the first Corvus node with read access to the local
+`gentoo-rescue:latest` raw image and access to the exporter VM template.
+The command writes the update files and image checksum to `OUTPUT_DIR`
+(default `build/gentoo-rescue`). The local `script` command from util-linux
+keeps SCP progress visible in captured logs.
+
+The configured SSH account on `gentoo-rescue.v7k.me` needs write access to
+`/var/www/public`. SCP directly replaces `gentoo-rescue.raw`, `vmlinuz`,
+`initramfs.img`, `root.squashfs`, `gentoo-rescue.raw.sha256`, and `SHA256SUMS`,
+with the checksum files copied last. An interrupted transfer can leave a
+partial public file. Rerun `make upload` to replace the complete set.
+The command sets the six public files to mode `0644` and verifies both
+checksum files over HTTPS after copying.
 
 ## Initial USB installation
 
-Use the registered raw image for a new USB stick. Obtain its path on the node
-from `crv disk show gentoo-rescue:latest`. Run these commands with access to
-that raw file. Replace `/path/to/registered-rescue.raw` with its path and
-`/dev/sdX` with the **whole unmounted USB device**. Writing destroys the
-contents of the USB device.
+Run on the first registered Corvus node with the local placement of
+`gentoo-rescue:latest`. Both USB commands require root and use the same
+Corvus connection settings as the exporter. Pass those settings to the
+process running under sudo if your installation uses a custom connection.
+A separate export is unnecessary.
+
+Use the whole unmounted USB device. Check its path before running:
 
 ```sh
-image=/path/to/registered-rescue.raw
-sudo dd if="$image" of=/dev/sdX bs=4M conv=fsync status=progress
-sudo cmp -n "$(stat -c %s "$image")" "$image" /dev/sdX
+sudo make usb-write DEVICE=/dev/disk/by-id/usb-…
 ```
 
+All files on the drive will be replaced. Press Ctrl+C during the 10-second
+countdown to cancel. The command reads the written image back to verify it.
 The first writable boot expands storage to use the remaining device capacity.
-Back up home and reflash once when switching from an older layout. Restore
-the contents of the old home directory directly into the new ext4 partition root.
 
 ## Offline payload updates
 
-If the existing GRUB menu checks a separate SquashFS checksum, back up home and
-reflash with the registered raw image to install the updated menu.
-
-Boot another OS, unmount the rescue system, and mount its ext4 partition at
-`/mnt/rescue`. Do not update the squashfs backing a running rescue session.
-Keep a backup of the previous payloads. Verify the exported files on another
-filesystem, then stage them and the checksum manifest before renaming them.
+Boot another OS and unmount all partitions on the rescue USB. Then run:
 
 ```sh
-update=yaml/gentoo/build/gentoo-rescue
-(cd "$update" && sha256sum -c SHA256SUMS) || exit 1
-for path in vmlinuz initramfs.img root.squashfs SHA256SUMS; do
-  sudo cp "$update/$path" "/mnt/rescue/$path.new" || exit 1
-done
-# Check the copies before replacing any active filename.
-for path in vmlinuz initramfs.img root.squashfs SHA256SUMS; do
-  sudo cmp "$update/$path" "/mnt/rescue/$path.new" || exit 1
-done
-sync
-for path in vmlinuz initramfs.img root.squashfs SHA256SUMS; do
-  sudo mv "/mnt/rescue/$path.new" "/mnt/rescue/$path" || exit 1
-done
-sync
-sudo umount /mnt/rescue
+sudo make usb-update DEVICE=/dev/disk/by-id/usb-…
 ```
 
-Have enough free space for the staged files. Each rename is atomic, but the
-renames together are not: do not interrupt this step, and restore a complete
-matching set if interrupted. Existing home, filesystem UUID and ESP remain in
-place. New payloads do not embed the exporting stick's UUID; the existing ESP
-configuration supplies the destination UUID at boot.
-
-To add the RAM entry to an existing stick, install the matching payloads as
-above. Mount that stick's ESP and back up its `grub/grub.cfg`. Render the new
-`assets/grub/grub.cfg.in` using the stick's own ext4 UUID (from
-`blkid -s UUID -o value` on partition 3) in place of every `@CARRIER_UUID@`.
-Validate the rendered file with `grub-script-check` before replacing the ESP
-configuration. Sync and unmount both partitions before booting.
+The updater verifies the published image's payload checksums, stages changed
+files and installs the checksum manifest last. It preserves persistent home,
+the carrier UUID, and the existing ESP and GRUB menu. Leave enough free space
+for the staged files. If the update is interrupted, rerun the command before
+booting. To change the GRUB menu or migrate an older disk layout, back up home,
+flash the current image, and restore home to the ext4 partition root.
 
 ## Validation
 
 ```sh
-make yaml-schema-check
-make -C yaml/gentoo test IMAGE=rescue
+make test
+make test-integration
 ```
+
+Install pytest and jsonschema in the selected Python environment. The integration
+tests use the exporter connection settings and boot disposable UEFI VMs from
+`gentoo-rescue:latest`. Set `RESCUE_IMAGE` to test a different registered image
+or version.
 
 The runtime regression checks simulate healthy, absent, read-only, full,
 inode-exhausted and I/O-failing storage, plus failed binds/remounts/unmounts.

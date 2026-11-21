@@ -1,4 +1,3 @@
-# yaml-language-server: $schema=../../../schema/json/build.schema.json
 vars:
   image_if_exists: update
   cache_dir: /data/corvus-cache

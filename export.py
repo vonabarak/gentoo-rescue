@@ -9,6 +9,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Callable
 
 import capnp
 from corvus_client import Client, CorvusError, GuestAgentError, InvalidTransition
@@ -93,7 +94,7 @@ def verify_payloads(work: Path) -> None:
             raise ValueError(f"Checksum mismatch for {name}")
 
 
-def download_payloads(client: Client, work: Path) -> None:
+def resolve_image(client: Client):
     nodes = client.nodes.list()
     if not nodes:
         raise ValueError("No Corvus nodes are registered")
@@ -101,9 +102,18 @@ def download_payloads(client: Client, work: Path) -> None:
     image = client.disks.get(IMAGE).show()
     if image.ephemeral:
         raise ValueError(f"{IMAGE} must be a persistent published image")
-    if not any(placement.node.id == node.id for placement in image.placements):
+    placement = next((p for p in image.placements if p.node.id == node.id), None)
+    if placement is None:
         raise ValueError(f"{IMAGE} has no placement on the first node, {node.name}")
 
+    return node, image, placement
+
+
+def download_payloads(
+    client: Client, work: Path, node, image, *, progress: Callable[[str], None] | None = None
+) -> None:
+    if progress:
+        progress("Starting the Corvus export VM")
     name = f"gentoo-rescue-export-{uuid.uuid4().hex}"
     template = client.templates.get(TEMPLATE)
     for drive in template.show().drives:
@@ -126,7 +136,11 @@ def download_payloads(client: Client, work: Path) -> None:
         guest_command(vm, MOUNT_COMMAND, "Mounting rescue data")
         mounted = True
         for filename in FILES:
+            if progress:
+                progress(f"Downloading {filename} from Corvus")
             vm.download_to_file(f"{MOUNT}/{filename}", work / filename)
+        if progress:
+            progress("Verifying update file checksums")
         verify_payloads(work)
     except BaseException as exc:
         failure = exc
@@ -162,7 +176,8 @@ def export_rescue_image(client: Client, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".export-", dir=output) as directory:
         work = Path(directory)
-        download_payloads(client, work)
+        node, image, _ = resolve_image(client)
+        download_payloads(client, work, node, image)
         directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
         try:
             fcntl.flock(directory_fd, fcntl.LOCK_EX)
