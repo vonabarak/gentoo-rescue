@@ -124,6 +124,7 @@ RUNTIME_PATHS = (
     "etc/lvm/lvm.conf",
     "etc/mdadm.conf",
     "usr/local/sbin/rescue-home",
+    "usr/local/sbin/rescue-update",
     "usr/local/sbin/rescue-grow",
 )
 KERNEL_PATHS = (

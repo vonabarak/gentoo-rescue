@@ -240,6 +240,19 @@ All files on the drive will be replaced. Press Ctrl+C during the 10-second
 countdown to cancel. The command reads the written image back to verify it.
 The first writable boot expands storage to use the remaining device capacity.
 
+## Update from a RAM boot
+
+Boot **Gentoo rescue (copy to RAM)**, connect to the network, and leave or
+reinsert the original USB drive. Run `rescue-update` from the root shell.
+It compares the published checksums with the files on the USB and shows the
+package inventory diff before asking for confirmation. Use
+`rescue-update --yes` to skip the prompt. The server must provide `packages.md`.
+
+The USB needs room to stage every changed payload while keeping the existing
+files. A normal writable boot can expand the rescue partition on a larger drive.
+The update leaves the running RAM session alone. Reboot after it succeeds.
+If replacement is interrupted, rerun the command before rebooting.
+
 ## Offline payload updates
 
 Boot another OS and unmount all partitions on the rescue USB. Then run:

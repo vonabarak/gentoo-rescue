@@ -1,0 +1,251 @@
+#!/bin/bash
+set -euo pipefail
+export LC_ALL=C
+base=https://gentoo-rescue.v7k.me
+payloads=(vmlinuz initramfs.img root.squashfs)
+
+fail() { echo "rescue-update: $*" >&2; exit 1; }
+
+download() {
+    local status
+    status=$(curl -q --suppress-connect-headers --write-out '%{http_code}' --proto '=https' --fail --silent --show-error --connect-timeout 15 \
+        --max-time 3600 --header 'Cache-Control: no-cache' "${@:3}" \
+        --output "$2" "$base/$1") || fail "Could not fetch $1"
+    [[ $status == 200 ]] || fail "Unexpected HTTP status $status for $1"
+}
+
+parse_manifest() {
+    awk '
+        $0 !~ /^[[:xdigit:]]+ [ *](vmlinuz|initramfs\.img|root\.squashfs)$/ { exit 1 }
+        length($1) != 64 { exit 1 }
+        { name=substr($0,67); if (seen[name]++) exit 1; print tolower($1),name }
+        END { if (NR != 3) exit 1 }
+    ' "$1" | sort -k2
+}
+
+identify_carrier() {
+    local candidates disk layout
+    candidates=$(blkid -c /dev/null -t "UUID=$uuid" -o device) || return 1
+    [[ $candidates != *$'\n'* && -b $candidates ]] || return 1
+    device=$(readlink -f -- "$candidates") || return 1
+    [[ $(blkid -p -s TYPE -o value "$device") == ext4 &&
+       $(blkid -p -s LABEL -o value "$device") == rescue-data &&
+       $(blkid -p -s PART_ENTRY_NUMBER -o value "$device") == 3 &&
+       $(blockdev --getro "$device") == 0 ]] || return 1
+    disk="/dev/$(lsblk -ndo PKNAME "$device")"
+    [[ -b $disk && $(blkid -p -s PTTYPE -o value "$disk") == gpt ]] || return 1
+    layout=$(lsblk --properties-by blkid -nr -o PARTN,PARTTYPE "$disk" |
+        awk 'NF {print tolower($1),tolower($2)}') || return 1
+    [[ $layout == $'1 21686148-6449-6e6f-744e-656564454649\n2 c12a7328-f81f-11d2-ba4b-00a0c93ec93b\n3 0fc63daf-8483-4772-8e79-3d69d8477de4' ]] || return 1
+    ! findmnt -rn --source "$device" >/dev/null
+}
+
+digest() {
+    local sum
+    sum=$(sha256sum < "$1") || return 1
+    printf '%s\n' "${sum%% *}"
+}
+
+snapshot() {
+    local name path sum
+    for name in "${payloads[@]}" packages.md SHA256SUMS; do
+        path=$media/$name
+        if [[ -e $path || -L $path ]]; then
+            [[ -f $path && ! -L $path ]] || fail "Expected a regular file at $path"
+            sum=$(digest "$path") || fail "Cannot read $path"
+            printf '%s %s\n' "$name" "$sum"
+        fi
+    done
+}
+
+cleanup() {
+    local status=$?
+    trap - EXIT
+    if [[ -n $stage ]]; then rm -rf -- "$stage" || status=1; fi
+    if (( mounted )); then
+        umount -- "$media" || { echo "Could not unmount $media" >&2; exit 1; }
+    fi
+    rm -rf -- "$work" || status=1
+    exit "$status"
+}
+
+boot_uuid() {
+    local argument ram=0 uuid=
+    local -a arguments
+    (( EUID == 0 )) || fail 'Run as root'
+    read -ra arguments < /proc/cmdline
+    for argument in "${arguments[@]}"; do
+        case "$argument" in
+            corvus.rescue.ram=1) ram=1 ;;
+            root=rescue:UUID=*) uuid=${argument#root=rescue:UUID=} ;;
+        esac
+    done
+    (( ram )) && [[ $(findmnt -nro FSTYPE --mountpoint /run/initramfs/rescue-media) == tmpfs ]] ||
+        fail 'Boot using Gentoo rescue (copy to RAM)'
+    [[ $uuid =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]] ||
+        fail 'Invalid boot carrier UUID'
+    printf '%s\n' "${uuid,,}"
+}
+
+prepare_carrier() {
+    local runtime_dir=$1
+    uuid=$(boot_uuid) || exit 1
+    exec 9>"$runtime_dir/rescue-update-$uuid.lock"
+    flock -n 9 || fail 'Another update is running'
+    identify_carrier || fail 'Reinsert the unique, unmounted, writable rescue boot media'
+    identity=$(stat -Lc '%t:%T' "$device")
+    work=$(mktemp -d "$runtime_dir/rescue-update.XXXXXXXX")
+    stage=
+    mounted=0
+    media=$work/media
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    mkdir -- "$media"
+}
+
+inspect_release() {
+    local name sum
+    local -A actual=()
+
+    download SHA256SUMS "$work/SHA256SUMS" --max-filesize 4096
+    parse_manifest "$work/SHA256SUMS" > "$work/expected" || fail 'Invalid published SHA256SUMS'
+    while read -r sum name; do expected[$name]=$sum; done < "$work/expected"
+    mount -t ext4 -o ro,noload,nodev,nosuid,noexec -- "$device" "$media"
+    mounted=1
+    snapshot > "$work/local"
+    while read -r name sum; do actual[$name]=$sum; done < "$work/local"
+    for name in "${payloads[@]}"; do
+        if [[ ${actual[$name]-} != "${expected[$name]}" ]]; then changed+=("$name"); fi
+    done
+    if ! parse_manifest "$media/SHA256SUMS" > "$work/local-manifest" 2>/dev/null ||
+        ! cmp -s "$work/local-manifest" "$work/expected"; then
+        manifest_changed=1
+    fi
+}
+
+show_update_preview() {
+    local diff_status=0
+
+    download packages.md "$work/packages.md" --max-filesize 4194304
+    [[ -s $work/packages.md ]] || fail 'Published package inventory is empty'
+    if [[ -f $media/packages.md ]]; then
+        cp -- "$media/packages.md" "$work/local-packages.md"
+    else
+        touch "$work/local-packages.md"
+    fi
+    umount -- "$media"
+    mounted=0
+    diff -u --label 'Installed packages.md' --label 'Published packages.md' \
+        "$work/local-packages.md" "$work/packages.md" > "$work/diff" || diff_status=$?
+    (( diff_status <= 1 )) || fail 'Could not compare package inventories'
+    if (( diff_status )); then
+        # Escape control bytes from the remote report before printing to a terminal.
+        tr -cd '\11\12\40-\176' < "$work/diff"
+    else
+        echo 'Package inventories match.'
+    fi
+    printf 'Boot carrier: %s\n' "$device"
+    if (( ${#changed[@]} )); then printf 'Download: %s\n' "${changed[@]}"; fi
+}
+
+confirm_update() {
+    local answer
+    [[ -t 0 ]] || fail 'Use --yes for non-interactive updates'
+    read -rp 'Download and install the update? [y/N] ' answer || answer=
+    [[ ${answer,,} == y || ${answer,,} == yes ]]
+}
+
+stage_update() {
+    local name size total=0 available inodes
+    local -A sizes=()
+
+    for name in "${changed[@]}"; do
+        download "$name" "$work/headers" --head
+        size=$(awk 'tolower($1)=="content-length:" {sub(/\r$/, "", $2); print $2}' "$work/headers")
+        [[ $size =~ ^[1-9][0-9]{0,11}$ ]] || fail "Could not determine download size for $name"
+        sizes[$name]=$size
+        total=$((total + size))
+    done
+    identify_carrier && [[ $(stat -Lc '%t:%T' "$device") == "$identity" ]] ||
+        fail 'Boot media changed during the update'
+    mount -t ext4 -o rw,nodev,nosuid,noexec -- "$device" "$media"
+    mounted=1
+    snapshot > "$work/recheck"
+    cmp -s "$work/local" "$work/recheck" || fail 'Carrier files changed, rerun the update'
+    available=$(df -B1 --output=avail -- "$media" | tail -1)
+    inodes=$(df --output=iavail -- "$media" | tail -1)
+    total=$((total + $(stat -c %s "$work/packages.md") + 65536))
+    (( available >= total && inodes >= ${#changed[@]} + 3 )) ||
+        fail 'Not enough free space to stage the update. A normal writable boot can expand a larger USB drive.'
+    stage=$(mktemp -d "$media/.rescue-update.XXXXXXXX")
+    for name in "${changed[@]}"; do
+        download "$name" "$stage/$name" --max-filesize "${sizes[$name]}"
+        [[ $(digest "$stage/$name") == "${expected[$name]}" ]] ||
+            fail "Checksum mismatch for $name"
+    done
+    download SHA256SUMS "$work/recheck" --max-filesize 4096
+    cmp -s "$work/SHA256SUMS" "$work/recheck" || fail 'Published release changed, rerun the update'
+    download packages.md "$work/recheck" --max-filesize 4194304
+    cmp -s "$work/packages.md" "$work/recheck" || fail 'Published inventory changed, rerun the update'
+}
+
+install_update() {
+    local name
+
+    install -m 0644 -- "$work/packages.md" "$stage/packages.md"
+    if (( manifest_changed )); then
+        install -m 0644 -- "$work/SHA256SUMS" "$stage/SHA256SUMS"
+    fi
+    if (( ${#changed[@]} )); then chmod 0644 -- "${changed[@]/#/$stage/}"; fi
+    sync -f -- "$stage"
+    for name in "${changed[@]}" packages.md; do
+        mv -fT -- "$stage/$name" "$media/$name"
+    done
+    sync -f -- "$media"
+    if (( manifest_changed )); then
+        mv -fT -- "$stage/SHA256SUMS" "$media/SHA256SUMS"
+        sync -f -- "$media"
+    fi
+    rmdir -- "$stage"
+    stage=
+    umount -- "$media"
+    mounted=0
+}
+
+main() {
+    local runtime_dir=$1
+    shift
+    local yes=0
+    case "${1-}" in
+        -h|--help) echo 'Usage: rescue-update [-y|--yes]'; return ;;
+        -y|--yes) yes=1; shift ;;
+    esac
+    (( $# == 0 )) || fail 'Usage: rescue-update [-y|--yes]'
+
+    # Update steps share this state. Mount and staging paths also outlive
+    # main so the EXIT trap can clean up after an early return.
+    local uuid device identity manifest_changed=0
+    local -a changed=()
+    local -A expected=()
+    prepare_carrier "$runtime_dir"
+    inspect_release
+    if (( ${#changed[@]} == 0 && ! manifest_changed )); then
+        echo 'USB payloads are already up to date.'
+        return
+    fi
+
+    show_update_preview
+    if (( ! yes )) && ! confirm_update; then
+        echo 'Update cancelled.'
+        return
+    fi
+
+    stage_update
+    install_update
+    echo 'USB updated. Reboot to use the new rescue release.'
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main /run "$@"
+fi

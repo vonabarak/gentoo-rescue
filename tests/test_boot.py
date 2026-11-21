@@ -37,14 +37,14 @@ class Console:
                 raise AssertionError(f"Console closed: {self.output[-4096:]!r}")
             self.output.extend(chunk)
 
-    async def command(self, command):
+    async def command(self, command, timeout=30):
         token = uuid.uuid4().hex
         # Split the marker in the command so terminal echo cannot match it.
         offset = len(self.output)
         await self.stream.write(
             f"({command}); printf '\\n%s%s:%s\\n' {token[:16]} {token[16:]} $?\r".encode()
         )
-        await self.wait_for(f"{token}:0".encode(), offset, timeout=30)
+        await self.wait_for(f"{token}:0".encode(), offset, timeout=timeout)
 
 
 @asynccontextmanager
@@ -156,6 +156,11 @@ async def check_vm(vm, downs):
                 'test "$(findmnt -n -o FSTYPE -M /root)" = ext4 && '
                 "touch /root/.boot-write-test"
             )
+            await console.command(
+                'test -x /usr/local/sbin/rescue-update && '
+                '! rescue-update --yes > /tmp/update-error 2>&1 && '
+                "grep -Fq 'Boot using Gentoo rescue (copy to RAM)' /tmp/update-error"
+            )
         else:
             await console.command(
                 "grep -qw 'corvus.rescue.ram=1' /proc/cmdline && "
@@ -169,3 +174,37 @@ async def check_vm(vm, downs):
                 f"test -s {MEDIA}/root.squashfs && test -s {MEDIA}/SHA256SUMS && "
                 "touch /root/.boot-write-test"
             )
+            await check_ram_update(console)
+
+
+async def check_ram_update(console):
+    await console.command(
+        'carrier=$(blkid -L rescue-data) && mkdir -p /tmp/update-carrier && '
+        'mount "$carrier" /tmp/update-carrier && '
+        'rm /tmp/update-carrier/vmlinuz /tmp/update-carrier/SHA256SUMS && '
+        'umount /tmp/update-carrier'
+    )
+    # Serve the RAM-boot files as a fixture while exercising actual disk mounts.
+    await console.command(
+        f'export UPDATE_FIXTURE={MEDIA}; '
+        'curl() { local name=${!#} out head=0; name=${name##*/}; '
+        'while (( $# )); do case "$1" in '
+        '--output) shift; out=$1 ;; --head) head=1 ;; esac; shift; done; '
+        'if (( head )); then printf "Content-Length: %s\\r\\n" '
+        '"$(stat -c %s "$UPDATE_FIXTURE/$name")" > "$out"; '
+        'else cp "$UPDATE_FIXTURE/$name" "$out"; fi && printf 200; }; '
+        'export -f curl; rescue-update --yes',
+        timeout=120,
+    )
+    await console.command(
+        'carrier=$(blkid -L rescue-data) && ! findmnt -n -S "$carrier" && '
+        'mount -o ro "$carrier" /tmp/update-carrier && '
+        f'cmp {MEDIA}/vmlinuz /tmp/update-carrier/vmlinuz && '
+        f'cmp {MEDIA}/SHA256SUMS /tmp/update-carrier/SHA256SUMS && '
+        f'cmp {MEDIA}/packages.md /tmp/update-carrier/packages.md && '
+        'test "$(cat /tmp/update-carrier/.boot-test)" = rescue-marker && '
+        'test ! -e /tmp/update-carrier/.boot-write-test && '
+        '(cd /tmp/update-carrier && sha256sum --check SHA256SUMS) && '
+        'umount /tmp/update-carrier',
+        timeout=120,
+    )
