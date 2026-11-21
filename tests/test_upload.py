@@ -27,7 +27,7 @@ def test_prepare_pins_image_and_hashes_staged_bytes(tmp_path, monkeypatch):
 
     lookup.assert_called_once_with(client)
     open_image.assert_called_once_with(node, disk, placement)
-    export.assert_called_once_with(client, tmp_path, node, disk, progress=upload.report)
+    export.assert_called_once_with(client, tmp_path, node, disk, progress=upload.report, require_inventory=True)
     assert path == tmp_path / "corvus.raw"
     assert (tmp_path / upload.RAW_MANIFEST).read_text() == (
         f"{hashlib.sha256(source).hexdigest()}  {upload.RAW}\n"
@@ -51,7 +51,7 @@ def test_transfer(tmp_path, monkeypatch, capsys, fail):
         upload.transfer(tmp_path, path)
         assert [shlex.split(call.args[0][3])[-1] for call in scp.call_args_list] == [
             f"{upload.HOST}:{upload.PUBLIC}/{name}"
-            for name in (upload.RAW, *upload.PAYLOADS, *upload.MANIFESTS)
+            for name in (upload.RAW, *upload.PAYLOADS, upload.INVENTORY, *upload.MANIFESTS)
         ]
     assert "50%\n 100%\n" in capsys.readouterr().out
     assert shlex.split(scp.call_args_list[0].args[0][3])[:2] == ["scp", str(path)]
@@ -59,7 +59,7 @@ def test_transfer(tmp_path, monkeypatch, capsys, fail):
 
 @pytest.mark.parametrize("status,body", [("200", b"fresh"), ("200", b"stale"), ("404", b"")])
 def test_verify_public(tmp_path, monkeypatch, status, body):
-    for name in upload.MANIFESTS:
+    for name in (upload.INVENTORY, *upload.MANIFESTS):
         (tmp_path / name).write_bytes(b"fresh")
 
     def curl(args, **kwargs):

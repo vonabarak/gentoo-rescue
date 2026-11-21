@@ -8,7 +8,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from export import FILES, verify_payloads
+from export import INVENTORY, MANIFEST, PAYLOADS, verify_payloads
 from usb_media import carrier, main, mounted, run, usb_info
 
 
@@ -19,7 +19,16 @@ def digest(path):
 
 def update_files(source, target):
     changed = {}
-    for name in FILES:
+    inventory = source / INVENTORY
+    try:
+        inventory_mode = inventory.lstat().st_mode
+    except FileNotFoundError:
+        files = (*PAYLOADS, MANIFEST)
+    else:
+        if not stat.S_ISREG(inventory_mode) or not inventory.stat().st_size:
+            raise ValueError(f"Expected a nonempty regular file at {inventory}")
+        files = (*PAYLOADS, INVENTORY, MANIFEST)
+    for name in files:
         destination = target / name
         expected = digest(source / name)
         try:

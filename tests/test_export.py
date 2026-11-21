@@ -29,19 +29,25 @@ def corvus() -> tuple[Mock, Mock, Mock]:
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "readiness", "mount", "download", "checksum"]
+    "failure", [None, "legacy", "readiness", "mount", "download", "checksum"]
 )
 def test_export(
     tmp_path: Path, corvus: tuple[Mock, Mock, Mock], failure: str | None
 ) -> None:
     client, template, vm = corvus
+    if failure == "legacy":
+        vm.guest_exec.side_effect = lambda command: GuestExecResult(
+            3 if EXPORT["INVENTORY"] in command else 0, "", ""
+        )
     files = EXPORT["FILES"]
     manifest = "".join(
         f"{hashlib.sha256(name.encode()).hexdigest()}  {name}\n" for name in files[:-1]
     )
     expected = {name: name.encode() for name in files[:-1]}
     expected["SHA256SUMS"] = manifest.encode()
-    if failure:
+    if failure is None:
+        expected[EXPORT["INVENTORY"]] = b"# Installed packages\n"
+    if failure not in {None, "legacy"}:
         for name in files:
             (tmp_path / name).write_bytes(b"previous")
 
@@ -66,7 +72,7 @@ def test_export(
             GuestExecResult(1, "", "bad disk"),
         ]
 
-    if failure:
+    if failure not in {None, "legacy"}:
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(
                 "time.monotonic",

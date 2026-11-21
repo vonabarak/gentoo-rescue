@@ -12,7 +12,7 @@ from pathlib import Path
 import capnp
 from corvus_client import CorvusError
 
-from export import MANIFEST, PAYLOADS, connect, download_payloads, resolve_image
+from export import INVENTORY, MANIFEST, PAYLOADS, connect, download_payloads, resolve_image
 from usb_media import open_raw_image
 
 HOST = "gentoo-rescue.v7k.me"
@@ -20,7 +20,7 @@ PUBLIC = "/var/www/public"
 RAW = "gentoo-rescue.raw"
 RAW_MANIFEST = f"{RAW}.sha256"
 MANIFESTS = (RAW_MANIFEST, MANIFEST)
-RELEASE = (RAW, *PAYLOADS, *MANIFESTS)
+RELEASE = (RAW, *PAYLOADS, INVENTORY, *MANIFESTS)
 
 
 def report(message):
@@ -55,7 +55,7 @@ def prepare(work):
         (work / RAW_MANIFEST).write_text(
             f"{digest.hexdigest()}  {RAW}\n", encoding="ascii"
         )
-        download_payloads(client, work, node, image, progress=report)
+        download_payloads(client, work, node, image, progress=report, require_inventory=True)
     return path
 
 
@@ -88,7 +88,7 @@ def set_public_permissions():
 
 
 def verify_public(work):
-    for name in MANIFESTS:
+    for name in (INVENTORY, *MANIFESTS):
         url = f"https://{HOST}/{name}"
         report(f"Checking {url}")
         response = subprocess.check_output([
@@ -97,7 +97,7 @@ def verify_public(work):
         ])
         body, status = response[:-3], response[-3:]
         if status != b"200" or body != (work / name).read_bytes():
-            raise ValueError(f"Unexpected checksum response from {url} (HTTP {status.decode()})")
+            raise ValueError(f"Unexpected response from {url} (HTTP {status.decode()})")
 
 
 def main():
@@ -111,12 +111,12 @@ def main():
         transfer(work, raw_path)
         phase = "setting public file permissions"
         set_public_permissions()
-        phase = "public checksum verification"
+        phase = "public file verification"
         verify_public(work)
     except (OSError, ValueError, CorvusError, capnp.KjException, subprocess.CalledProcessError) as exc:
         detail = getattr(exc, "stderr", None)
         sys.exit(f"Rescue upload failed during {phase}: {exc}" + (f"\n{detail.strip()}" if detail else ""))
-    print(f"Published and verified checksums at https://{HOST}/")
+    print(f"Published and verified inventory and checksums at https://{HOST}/")
 
 
 if __name__ == "__main__":

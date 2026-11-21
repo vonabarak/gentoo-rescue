@@ -97,8 +97,12 @@ covers the kernel, initramfs and SquashFS. A failed check cancels that boot entr
 vmlinuz
 initramfs.img
 root.squashfs
+packages.md
 SHA256SUMS
 ```
+
+The build records all installed Gentoo package versions in `packages.md`.
+It appears at `/root/packages.md` on writable and copy-to-RAM boots.
 
 A custom generic dracut module mounts this partition under
 `/run/initramfs/rescue-media`, mounts the squashfs file read-only through a loop
@@ -195,10 +199,11 @@ TCP. TCP uses the Python client's default TLS configuration.
 The first Corvus node must have the published `gentoo-rescue:latest` image
 and be able to instantiate the `gentoo-musl-openrc-headless` template.
 The exporter attaches the rescue image read-only to a temporary VM, downloads
-and verifies the four files, and deletes the VM. It writes `vmlinuz`,
-`initramfs.img`, `root.squashfs`, and `SHA256SUMS` to
-`build/gentoo-rescue/`. Set `OUTPUT_DIR=/absolute/path` to
-override the destination.
+the boot files and the package inventory when present, verifies the boot
+payload checksums, and deletes the VM. It writes the files to
+`build/gentoo-rescue/`. Set `OUTPUT_DIR=/absolute/path` to override the
+destination. Use a fresh output directory when exporting an older image
+to avoid retaining a report from a previous export.
 
 ## Publish public downloads
 
@@ -210,11 +215,12 @@ keeps SCP progress visible in captured logs.
 
 The configured SSH account on `gentoo-rescue.v7k.me` needs write access to
 `/var/www/public`. SCP directly replaces `gentoo-rescue.raw`, `vmlinuz`,
-`initramfs.img`, `root.squashfs`, `gentoo-rescue.raw.sha256`, and `SHA256SUMS`,
-with the checksum files copied last. An interrupted transfer can leave a
+`initramfs.img`, `root.squashfs`, `packages.md`, `gentoo-rescue.raw.sha256`,
+and `SHA256SUMS`, with the checksum files copied last. An interrupted transfer can leave a
 partial public file. Rerun `make upload` to replace the complete set.
-The command sets the six public files to mode `0644` and verifies both
-checksum files over HTTPS after copying.
+The command sets the public files to mode `0644` and verifies the package
+inventory and both checksum files over HTTPS after copying. Rebuild older
+images to generate the inventory before uploading.
 
 ## Initial USB installation
 
@@ -243,8 +249,10 @@ sudo make usb-update DEVICE=/dev/disk/by-id/usb-…
 ```
 
 The updater verifies the published image's payload checksums, stages changed
-files and installs the checksum manifest last. It preserves persistent home,
-the carrier UUID, and the existing ESP and GRUB menu. Leave enough free space
+files and installs the checksum manifest last. It refreshes `packages.md`
+when the source image includes it. With a legacy source, an existing report
+remains a snapshot of the release that supplied it. The updater preserves
+other persistent home files, the carrier UUID, and the existing ESP and GRUB menu. Leave enough free space
 for the staged files. If the update is interrupted, rerun the command before
 booting. To change the GRUB menu or migrate an older disk layout, back up home,
 flash the current image, and restore home to the ext4 partition root.

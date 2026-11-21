@@ -134,7 +134,7 @@ def test_rescue_grub_uses_validated_carrier_uuid(
 
 def test_cleanup_does_not_publish_image(tmp_path: Path, rescue: ModuleType) -> None:
     context = BuildContext(
-        tmp_path, Mock(spec=CommandRunner), artifacts={"kernel": "6.12-gentoo"}
+        tmp_path, Mock(spec=CommandRunner), artifacts={"kernel": "6.12-gentoo", "media": tmp_path}
     )
     stage = rescue.RescueCleanupStage(Settings(Path("/dev/vdb"), tmp_path, None))
     residue = (
@@ -147,6 +147,7 @@ def test_cleanup_does_not_publish_image(tmp_path: Path, rescue: ModuleType) -> N
         "usr/bin/c99",
         "usr/bin/x86_64-pc-linux-gnu-g++-15",
         "var/db/pkg/sys-devel/gcc-15/CONTENTS",
+        "var/db/pkg/sys-devel/gcc-14.3.0-r1/CONTENTS",
     )
     runtime = (
         "usr/bin/strace",
@@ -164,6 +165,10 @@ def test_cleanup_does_not_publish_image(tmp_path: Path, rescue: ModuleType) -> N
         (modules / name).symlink_to("/usr/src/linux")
     with patch.object(stage, "reset_identity"):
         stage.execute(context)
+    assert (tmp_path / "packages.md").read_text().splitlines()[-2:] == [
+        "| `sys-devel/gcc` | `14.3.0-r1` |",
+        "| `sys-devel/gcc` | `15` |",
+    ]
     stage.verify(context)
     assert "image" not in context.artifacts
     assert not any((tmp_path / path).exists() for path in residue)

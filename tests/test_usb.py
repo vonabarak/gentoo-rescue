@@ -9,10 +9,11 @@ import pytest
 import update_usb
 import usb_media
 import write_usb
-from export import FILES, verify_payloads
+from export import FILES, INVENTORY, verify_payloads
 
 
-def test_update_only_changed_files(tmp_path):
+@pytest.mark.parametrize("previous_inventory", [None, "old", "current"])
+def test_update_only_changed_files(tmp_path, previous_inventory):
     source, target = tmp_path / "source", tmp_path / "target"
     source.mkdir()
     target.mkdir()
@@ -20,15 +21,22 @@ def test_update_only_changed_files(tmp_path):
         (source / name).write_text(name)
         (target / name).write_text(name)
     (target / "vmlinuz").write_text("previous")
+    (source / INVENTORY).write_text("current")
+    if previous_inventory is not None:
+        (target / INVENTORY).write_text(previous_inventory)
+    inventory_inode = (target / INVENTORY).stat().st_ino if previous_inventory else None
     (target / ".profile").write_text("persistent home")
     unchanged = (target / "root.squashfs").stat().st_ino
     update_usb.update_files(source, target)
     assert (target / "vmlinuz").read_text() == "vmlinuz"
     assert (target / "root.squashfs").stat().st_ino == unchanged
     assert (target / ".profile").read_text() == "persistent home"
-    before = {name: (target / name).stat().st_ino for name in FILES}
+    assert (target / INVENTORY).read_text() == "current"
+    if previous_inventory == "current":
+        assert (target / INVENTORY).stat().st_ino == inventory_inode
+    before = {name: (target / name).stat().st_ino for name in (*FILES, INVENTORY)}
     update_usb.update_files(source, target)
-    assert before == {name: (target / name).stat().st_ino for name in FILES}
+    assert before == {name: (target / name).stat().st_ino for name in (*FILES, INVENTORY)}
 
 
 def test_bad_source_checksum(tmp_path):

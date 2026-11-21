@@ -18,6 +18,7 @@ from corvus_client._sync.vm import SyncVm
 IMAGE = "gentoo-rescue:latest"
 TEMPLATE = "gentoo-musl-openrc-headless"
 PAYLOADS = ("vmlinuz", "initramfs.img", "root.squashfs")
+INVENTORY = "packages.md"
 MANIFEST = "SHA256SUMS"
 FILES = (*PAYLOADS, MANIFEST)
 MOUNT = "/run/corvus-rescue-export"
@@ -110,8 +111,10 @@ def resolve_image(client: Client):
 
 
 def download_payloads(
-    client: Client, work: Path, node, image, *, progress: Callable[[str], None] | None = None
-) -> None:
+    client: Client, work: Path, node, image, *,
+    progress: Callable[[str], None] | None = None,
+    require_inventory: bool = False,
+) -> tuple[str, ...]:
     if progress:
         progress("Starting the Corvus export VM")
     name = f"gentoo-rescue-export-{uuid.uuid4().hex}"
@@ -142,6 +145,22 @@ def download_payloads(
         if progress:
             progress("Verifying update file checksums")
         verify_payloads(work)
+        inventory = f"{MOUNT}/{INVENTORY}"
+        result = vm.guest_exec(
+            f"if [ -e {inventory} ] || [ -L {inventory} ]; then "
+            f"test -f {inventory} && test ! -L {inventory} && test -s {inventory}; "
+            "else exit 3; fi"
+        )
+        if result.exit_code == 0:
+            if progress:
+                progress(f"Downloading {INVENTORY} from Corvus")
+            vm.download_to_file(inventory, work / INVENTORY)
+            return (*PAYLOADS, INVENTORY, MANIFEST)
+        if result.exit_code != 3:
+            raise ValueError(f"Invalid package inventory at {inventory} (exit {result.exit_code})")
+        if require_inventory:
+            raise ValueError(f"{IMAGE} lacks {INVENTORY}. Publish a rebuilt image first.")
+        return FILES
     except BaseException as exc:
         failure = exc
         raise
@@ -177,14 +196,14 @@ def export_rescue_image(client: Client, output: Path) -> None:
     with tempfile.TemporaryDirectory(prefix=".export-", dir=output) as directory:
         work = Path(directory)
         node, image, _ = resolve_image(client)
-        download_payloads(client, work, node, image)
+        files = download_payloads(client, work, node, image)
         directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
         try:
             fcntl.flock(directory_fd, fcntl.LOCK_EX)
-            for name in FILES:
+            for name in files:
                 if (output / name).is_dir():
                     raise IsADirectoryError(output / name)
-            for name in FILES:
+            for name in files:
                 (work / name).replace(output / name)
         finally:
             os.close(directory_fd)

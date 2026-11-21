@@ -552,8 +552,30 @@ class RescueKernelStage(GentooStage):
 class RescueCleanupStage(FinalizeStage):
     """Clean the staging system without prematurely publishing a media artifact."""
 
-    requires = frozenset({"kernel"})
+    requires = frozenset({"kernel", "media"})
     produces = frozenset({"clean-root"})
+
+    def write_inventory(self, context: BuildContext) -> None:
+        import portage
+        from portage.versions import catpkgsplit
+
+        environment = dict(os.environ)
+        environment.pop("SYSROOT", None)
+        target = str(context.root)
+        trees = portage.create_trees(config_root="/", target_root=target, env=environment)
+        packages = trees[target.rstrip("/") + "/"]["vartree"].dbapi.cpv_all()
+        if not packages:
+            raise ValueError(f"No installed packages found in {context.root / 'var/db/pkg'}")
+        rows = []
+        for cpv in packages:
+            category, package, _, _ = catpkgsplit(cpv)
+            name = f"{category}/{package}"
+            rows.append((name, cpv.removeprefix(name + "-")))
+        report = "# Installed packages\n\n| Package | Version |\n| --- | --- |\n"
+        report += "".join(f"| `{name}` | `{version}` |\n" for name, version in sorted(rows))
+        destination = Path(str(context.artifacts["media"])) / "packages.md"
+        destination.write_text(report, encoding="utf-8")
+        destination.chmod(0o644)
 
     def clean(self, context: BuildContext) -> None:
         super().clean(context)
@@ -598,6 +620,7 @@ class RescueCleanupStage(FinalizeStage):
         mounts = context.artifacts.get("chroot-mounts")
         if isinstance(mounts, Mounts):
             mounts.close()
+        self.write_inventory(context)
         self.clean(context)
         write(
             context.root / "etc/corvus-image-info",

@@ -147,6 +147,9 @@ async def check_vm(vm, downs):
             'test "$(findmnt -rn -o FSTYPE,VFS-OPTIONS -M / | cut -d, -f1)" = "overlay rw" && '
             f'test "$(findmnt -rn -o FSTYPE,VFS-OPTIONS -M {LOWER} | cut -d, -f1)" = "squashfs ro"'
         )
+        await console.command(
+            "test -s /root/packages.md && grep -q '^# Installed packages$' /root/packages.md"
+        )
         if downs < 2:
             assert b"Boot file verification failed." not in console.output
             await console.command(
