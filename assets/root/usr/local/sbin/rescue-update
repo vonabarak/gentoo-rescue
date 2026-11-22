@@ -1,14 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 export LC_ALL=C
-base=https://gentoo-rescue.v7k.me
 payloads=(vmlinuz initramfs.img root.squashfs)
 
 fail() { echo "rescue-update: $*" >&2; exit 1; }
 
 download() {
     local status
-    status=$(curl -q --suppress-connect-headers --write-out '%{http_code}' --proto '=https' --fail --silent --show-error --connect-timeout 15 \
+    status=$(curl -q --globoff --suppress-connect-headers --write-out '%{http_code}' --proto '=https' --fail --silent --show-error --connect-timeout 15 \
         --max-time 3600 --header 'Cache-Control: no-cache' "${@:3}" \
         --output "$2" "$base/$1") || fail "Could not fetch $1"
     [[ $status == 200 ]] || fail "Unexpected HTTP status $status for $1"
@@ -216,12 +215,23 @@ install_update() {
 main() {
     local runtime_dir=$1
     shift
-    local yes=0
-    case "${1-}" in
-        -h|--help) echo 'Usage: rescue-update [-y|--yes]'; return ;;
-        -y|--yes) yes=1; shift ;;
-    esac
-    (( $# == 0 )) || fail 'Usage: rescue-update [-y|--yes]'
+    local yes=0 base=https://gentoo-rescue.v7k.me
+    local usage='Usage: rescue-update [-y|--yes] [--source HTTPS_URL]'
+    while (( $# )); do
+        case "$1" in
+            -h|--help) echo "$usage"; return ;;
+            -y|--yes) yes=1; shift ;;
+            --source)
+                (( $# >= 2 )) || fail '--source requires an HTTPS URL'
+                base=$2
+                shift 2
+                ;;
+            *) fail "$usage" ;;
+        esac
+    done
+    local source_pattern='^https://[^/@?#[:space:]]+(/[^?#[:space:]]*)?$'
+    [[ $base =~ $source_pattern ]] || fail 'Source must be an HTTPS base URL without credentials, a query, or a fragment'
+    while [[ $base == */ ]]; do base=${base%/}; done
 
     # Update steps share this state. Mount and staging paths also outlive
     # main so the EXIT trap can clean up after an early return.

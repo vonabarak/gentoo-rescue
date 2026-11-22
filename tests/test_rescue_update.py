@@ -19,8 +19,9 @@ identify_carrier() { device="$FIXTURE/device"; }
 mount() { rmdir "${@: -1}"; ln -s "$FIXTURE/usb" "${@: -1}"; }
 umount() { rm "$2"; mkdir "$2"; }
 curl() {
-    local name=${@: -1} output head=0
-    name=${name##*/}
+    local url=${@: -1} output head=0
+    local name=${url##*/}
+    printf '%s\n' "$url" >> "$FIXTURE/urls"
     while (( $# )); do
         case "$1" in
             --head) head=1 ;;
@@ -147,3 +148,26 @@ def test_interactive_confirmation(release, tmp_path, answer, install):
     assert ((usb / "vmlinuz").read_bytes() == (server / "vmlinuz").read_bytes()) == install
     if not install:
         assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\npackages.md 0\n"
+
+
+@pytest.mark.parametrize(
+    "args, base",
+    [
+        (("--yes",), "https://gentoo-rescue.v7k.me"),
+        (("--source", "https://mirror.example.org/rescue/", "--yes"),
+         "https://mirror.example.org/rescue"),
+    ],
+)
+def test_update_source_urls(release, tmp_path, args, base):
+    result = run_update(tmp_path, "", *args)
+    assert result.returncode == 0, result.stderr
+    names = ["SHA256SUMS", "packages.md", "vmlinuz", "vmlinuz", "SHA256SUMS", "packages.md"]
+    assert (tmp_path / "urls").read_text().splitlines() == [f"{base}/{name}" for name in names]
+
+
+@pytest.mark.parametrize("args", [("--source",), ("--source", "http://mirror.example.org")])
+def test_invalid_source_fails_before_network_access(release, tmp_path, args):
+    result = run_update(tmp_path, "", *args)
+    assert result.returncode == 1
+    assert "HTTPS" in result.stderr
+    assert not (tmp_path / "urls").exists()
