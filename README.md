@@ -225,7 +225,7 @@ images to generate the inventory before uploading.
 ## Initial USB installation
 
 Run on the first registered Corvus node with the local placement of
-`gentoo-rescue:latest`. Both USB commands require root and use the same
+`gentoo-rescue:latest`. The write command requires root and uses the same
 Corvus connection settings as the exporter. Pass those settings to the
 process running under sudo if your installation uses a custom connection.
 A separate export is unnecessary.
@@ -255,15 +255,20 @@ If replacement is interrupted, rerun the command before rebooting.
 
 ## Offline payload updates
 
-Boot another OS and unmount all partitions on the rescue USB. Then run:
+Run `make export` to prepare the update files. Then boot another OS if
+you are running from the rescue USB, unmount all partitions on it, and run:
 
 ```sh
 sudo make usb-update DEVICE=/dev/disk/by-id/usb-…
 ```
 
-The updater verifies the published image's payload checksums, stages changed
-files and installs the checksum manifest last. It refreshes `packages.md`
-when the source image includes it. With a legacy source, an existing report
+The updater reads `build/gentoo-rescue/` by default. Set `OUTPUT_DIR` on
+both Make commands to use a different directory, or pass `--source DIR`
+when invoking `update_usb.py` directly.
+
+The updater verifies the exported payload checksums, stages changed files,
+and installs the checksum manifest last. It refreshes `packages.md`
+when the export includes it. With a legacy export, an existing report
 remains a snapshot of the release that supplied it. The updater preserves
 other persistent home files, the carrier UUID, and the existing ESP and GRUB menu. Leave enough free space
 for the staged files. If the update is interrupted, rerun the command before

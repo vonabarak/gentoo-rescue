@@ -88,4 +88,4 @@ usb-write:
 
 usb-update: export DEVICE := $(DEVICE)
 usb-update:
-	"$(PYTHON)" update_usb.py "$$DEVICE"
+	"$(PYTHON)" update_usb.py "$$DEVICE" --source "$(OUTPUT_DIR)"

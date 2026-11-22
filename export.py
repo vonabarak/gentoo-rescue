@@ -77,9 +77,10 @@ def wait_for_guest(vm: SyncVm) -> None:
             time.sleep(1)
 
 
-def verify_payloads(work: Path) -> None:
+def verify_payloads(work: Path) -> dict[str, bytes]:
     checksums: dict[str, str] = {}
-    for line in (work / MANIFEST).read_text(encoding="ascii").splitlines():
+    manifest = (work / MANIFEST).read_bytes()
+    for line in manifest.decode("ascii").splitlines():
         match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *](.+)", line)
         if match is None or match[2] not in PAYLOADS or match[2] in checksums:
             raise ValueError(f"Invalid {MANIFEST} entry: {line!r}")
@@ -93,6 +94,10 @@ def verify_payloads(work: Path) -> None:
                 digest.update(chunk)
         if digest.hexdigest() != expected:
             raise ValueError(f"Checksum mismatch for {name}")
+    return {
+        **{name: bytes.fromhex(checksums[name]) for name in PAYLOADS},
+        MANIFEST: hashlib.sha256(manifest).digest(),
+    }
 
 
 def resolve_image(client: Client):

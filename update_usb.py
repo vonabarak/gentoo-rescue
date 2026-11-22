@@ -1,15 +1,16 @@
 """Update the rescue payloads on an offline USB drive."""
 
-import contextlib
+import argparse
 import hashlib
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 from pathlib import Path
 
 from export import INVENTORY, MANIFEST, PAYLOADS, verify_payloads
-from usb_media import carrier, main, mounted, run, usb_info
+from usb_media import carrier, mounted, target_disk, usb_info
 
 
 def digest(path):
@@ -17,20 +18,34 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").digest()
 
 
-def update_files(source, target):
-    changed = {}
+def source_checksums(source):
+    for name in (*PAYLOADS, MANIFEST):
+        path = source / name
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError as exc:
+            raise ValueError(f"Missing {path}. Run make export to prepare the source.") from exc
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"Expected a regular file at {path}")
+
+    checksums = verify_payloads(source)
     inventory = source / INVENTORY
     try:
-        inventory_mode = inventory.lstat().st_mode
+        info = inventory.lstat()
     except FileNotFoundError:
-        files = (*PAYLOADS, MANIFEST)
-    else:
-        if not stat.S_ISREG(inventory_mode) or not inventory.stat().st_size:
-            raise ValueError(f"Expected a nonempty regular file at {inventory}")
-        files = (*PAYLOADS, INVENTORY, MANIFEST)
-    for name in files:
+        return checksums
+    if not stat.S_ISREG(info.st_mode) or not info.st_size:
+        raise ValueError(f"Expected a nonempty regular file at {inventory}")
+    manifest = checksums.pop(MANIFEST)
+    checksums[INVENTORY] = digest(inventory)
+    checksums[MANIFEST] = manifest
+    return checksums
+
+
+def update_files(source, target, checksums):
+    changed = {}
+    for name, expected in checksums.items():
         destination = target / name
-        expected = digest(source / name)
         try:
             mode = destination.lstat().st_mode
         except FileNotFoundError:
@@ -64,30 +79,35 @@ def update_files(source, target):
     print("Updated " + ", ".join(changed))
 
 
-def update_usb(_path, image, device, identity, info):
+def update_usb(source, device, identity, info):
+    checksums = source_checksums(source)
     if device.stat().st_rdev != identity:
         raise ValueError("USB device changed")
     destination = carrier(device)
-    with contextlib.ExitStack() as cleanup:
-        loop = run(
-            "losetup",
-            "--find",
-            "--show",
-            "--read-only",
-            "--partscan",
-            f"/proc/{os.getpid()}/fd/{image.fileno()}",
-        )
-        cleanup.callback(run, "losetup", "--detach", loop)
-        run("udevadm", "settle", "--timeout=30")
-        source = cleanup.enter_context(
-            mounted(carrier(loop), "ro,noload,nodev,nosuid,noexec")
-        )
-        verify_payloads(source)
-        if device.stat().st_rdev != identity or usb_info(device) != info:
-            raise ValueError("USB device changed")
-        target = cleanup.enter_context(mounted(destination, "rw,nodev,nosuid,noexec"))
-        update_files(source, target)
+    if device.stat().st_rdev != identity or usb_info(device) != info:
+        raise ValueError("USB device changed")
+    with mounted(destination, "rw,nodev,nosuid,noexec") as target:
+        update_files(source, target, checksums)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("device", type=Path, help="whole USB block device")
+    parser.add_argument(
+        "--source", type=Path, default=Path("build/gentoo-rescue"),
+        help="exported payload directory (default: build/gentoo-rescue)",
+    )
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.exit(1, "Root privileges are required. Run with sudo.\n")
+    try:
+        with target_disk(args.device) as target:
+            update_usb(args.source, *target)
+    except KeyboardInterrupt:
+        parser.exit(130, "Interrupted.\n")
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"USB operation failed: {exc}\n")
 
 
 if __name__ == "__main__":
-    main(update_usb, __doc__)
+    main()
