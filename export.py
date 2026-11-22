@@ -18,7 +18,7 @@ from corvus_client._sync.vm import SyncVm
 IMAGE = "gentoo-rescue:latest"
 TEMPLATE = "gentoo-musl-openrc-headless"
 PAYLOADS = ("vmlinuz", "initramfs.img", "root.squashfs")
-INVENTORY = "packages.md"
+INVENTORY = "packages.txt"
 MANIFEST = "SHA256SUMS"
 FILES = (*PAYLOADS, MANIFEST)
 MOUNT = "/run/corvus-rescue-export"

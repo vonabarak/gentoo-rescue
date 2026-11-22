@@ -62,7 +62,7 @@ digest() {
 
 snapshot() {
     local name path sum
-    for name in "${payloads[@]}" packages.md SHA256SUMS; do
+    for name in "${payloads[@]}" packages.txt SHA256SUMS; do
         path=$media/$name
         if [[ -e $path || -L $path ]]; then
             [[ -f $path && ! -L $path ]] || fail "Expected a regular file at $path"
@@ -141,17 +141,17 @@ inspect_release() {
 show_update_preview() {
     local diff_status=0
 
-    download packages.md "$work/packages.md" --max-filesize 4194304
-    [[ -s $work/packages.md ]] || fail 'Published package inventory is empty'
-    if [[ -f $media/packages.md ]]; then
-        cp -- "$media/packages.md" "$work/local-packages.md"
+    download packages.txt "$work/packages.txt" --max-filesize 4194304
+    [[ -s $work/packages.txt ]] || fail 'Published package inventory is empty'
+    if [[ -f $media/packages.txt ]]; then
+        cp -- "$media/packages.txt" "$work/local-packages.txt"
     else
-        touch "$work/local-packages.md"
+        touch "$work/local-packages.txt"
     fi
     umount -- "$media"
     mounted=0
-    diff -u --label 'Installed packages.md' --label 'Published packages.md' \
-        "$work/local-packages.md" "$work/packages.md" > "$work/diff" || diff_status=$?
+    diff -u --label 'Installed packages.txt' --label 'Published packages.txt' \
+        "$work/local-packages.txt" "$work/packages.txt" > "$work/diff" || diff_status=$?
     (( diff_status <= 1 )) || fail 'Could not compare package inventories'
     if (( diff_status )); then
         # Escape control bytes from the remote report before printing to a terminal.
@@ -190,7 +190,7 @@ stage_update() {
     available=$(df -B1 --output=avail -- "$media" | tail -1)
     inodes=$(df --output=iavail -- "$media" | tail -1)
     local download_bytes=$total
-    total=$((total + $(stat -c %s "$work/packages.md") + 65536))
+    total=$((total + $(stat -c %s "$work/packages.txt") + 65536))
     (( available >= total && inodes >= ${#changed[@]} + 3 )) ||
         fail 'Not enough free space to stage the update. A normal writable boot can expand a larger USB drive.'
     stage=$(mktemp -d "$media/.rescue-update.XXXXXXXX")
@@ -209,13 +209,13 @@ stage_update() {
 install_update() {
     local name
 
-    install -m 0644 -- "$work/packages.md" "$stage/packages.md"
+    install -m 0644 -- "$work/packages.txt" "$stage/packages.txt"
     if (( manifest_changed )); then
         install -m 0644 -- "$work/SHA256SUMS" "$stage/SHA256SUMS"
     fi
     if (( ${#changed[@]} )); then chmod 0644 -- "${changed[@]/#/$stage/}"; fi
     sync -f -- "$stage"
-    for name in "${changed[@]}" packages.md; do
+    for name in "${changed[@]}" packages.txt; do
         mv -fT -- "$stage/$name" "$media/$name"
     done
     sync -f -- "$media"

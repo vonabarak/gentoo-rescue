@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from corvus_image_builder.core import BuildContext
@@ -572,9 +573,10 @@ class RescueCleanupStage(FinalizeStage):
             category, package, _, _ = catpkgsplit(cpv)
             name = f"{category}/{package}"
             rows.append((name, cpv.removeprefix(name + "-")))
-        report = "# Installed packages\n\n| Package | Version |\n| --- | --- |\n"
-        report += "".join(f"| `{name}` | `{version}` |\n" for name, version in sorted(rows))
-        destination = Path(str(context.artifacts["media"])) / "packages.md"
+        build_time = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        report = f"Build datetime: {build_time}\n\n"
+        report += "".join(f"{name} {version}\n" for name, version in sorted(rows))
+        destination = Path(str(context.artifacts["media"])) / "packages.txt"
         destination.write_text(report, encoding="utf-8")
         destination.chmod(0o644)
 

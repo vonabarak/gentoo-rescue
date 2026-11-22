@@ -46,7 +46,7 @@ def test_export(
     expected = {name: name.encode() for name in files[:-1]}
     expected["SHA256SUMS"] = manifest.encode()
     if failure is None:
-        expected[EXPORT["INVENTORY"]] = b"# Installed packages\n"
+        expected[EXPORT["INVENTORY"]] = b"Build datetime: 2026-01-01T00:00:00Z\n"
     if failure not in {None, "legacy"}:
         for name in files:
             (tmp_path / name).write_bytes(b"previous")

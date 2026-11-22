@@ -97,12 +97,13 @@ covers the kernel, initramfs and SquashFS. A failed check cancels that boot entr
 vmlinuz
 initramfs.img
 root.squashfs
-packages.md
+packages.txt
 SHA256SUMS
 ```
 
-The build records all installed Gentoo package versions in `packages.md`.
-It appears at `/root/packages.md` on writable and copy-to-RAM boots.
+The build records its UTC timestamp and all installed Gentoo package versions
+in `packages.txt`, with one package and version per line.
+It appears at `/root/packages.txt` on writable and copy-to-RAM boots.
 
 A custom generic dracut module mounts this partition under
 `/run/initramfs/rescue-media`, mounts the squashfs file read-only through a loop
@@ -215,7 +216,7 @@ keeps SCP progress visible in captured logs.
 
 The configured SSH account on `gentoo-rescue.v7k.me` needs write access to
 `/var/www/public`. SCP directly replaces `gentoo-rescue.raw`, `vmlinuz`,
-`initramfs.img`, `root.squashfs`, `packages.md`, `gentoo-rescue.raw.sha256`,
+`initramfs.img`, `root.squashfs`, `packages.txt`, `gentoo-rescue.raw.sha256`,
 and `SHA256SUMS`, with the checksum files copied last. An interrupted transfer can leave a
 partial public file. Rerun `make upload` to replace the complete set.
 The command sets the public files to mode `0644` and verifies the package
@@ -244,8 +245,10 @@ The first writable boot expands storage to use the remaining device capacity.
 
 Boot **Gentoo rescue (copy to RAM)**, connect to the network, and leave or
 reinsert the original USB drive. Run `rescue-update` from the root shell.
-It compares the published checksums with the files on the USB and shows the
-package inventory diff before asking for confirmation. Use
+If the USB payloads and checksum manifest match the published checksums,
+the script reports that the USB is up to date and exits. Otherwise it shows
+the package inventory comparison and asks for confirmation, even if the
+package inventories match. Use
 `rescue-update --yes` to skip the prompt. To use another server or release
 directory, pass `--source` with its HTTPS base URL:
 
@@ -253,7 +256,9 @@ directory, pass `--source` with its HTTPS base URL:
 rescue-update --source https://mirror.example.org/rescue/ --yes
 ```
 
-The source must provide `SHA256SUMS`, `packages.md`, and the three boot payloads.
+The source must provide `SHA256SUMS`, `packages.txt`, and the three boot payloads.
+To upgrade a USB whose updater expects `packages.md`, use the offline update
+procedure below with a current export.
 
 The USB needs room to stage every changed payload while keeping the existing
 files. A normal writable boot can expand the rescue partition on a larger drive.
@@ -274,7 +279,7 @@ both Make commands to use a different directory, or pass `--source DIR`
 when invoking `update_usb.py` directly.
 
 The updater verifies the exported payload checksums, stages changed files,
-and installs the checksum manifest last. It refreshes `packages.md`
+and installs the checksum manifest last. It refreshes `packages.txt`
 when the export includes it. With a legacy export, an existing report
 remains a snapshot of the release that supplied it. The updater preserves
 other persistent home files, the carrier UUID, and the existing ESP and GRUB menu. Leave enough free space

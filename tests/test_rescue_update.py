@@ -69,7 +69,7 @@ def release(tmp_path):
         for name, data in values.items():
             (directory / name).write_bytes(data)
         (directory / "SHA256SUMS").write_text(manifest(values))
-        (directory / "packages.md").write_text(f"# Installed packages\n\n{version}\n")
+        (directory / "packages.txt").write_text(f"Build datetime: 2026-01-01T00:00:00Z\n\n{version}\n")
     (usb / "persistent-home-file").write_text("keep")
     return usb, server
 
@@ -92,15 +92,24 @@ def test_updates_only_changed_payload_and_preserves_home(release, tmp_path):
     assert result.returncode == 0, result.stderr
     assert "-old\n+new" in result.stdout
     assert (tmp_path / "requests").read_text().splitlines() == [
-        "SHA256SUMS 0", "packages.md 0", "vmlinuz 1", "vmlinuz 0",
+        "SHA256SUMS 0", "packages.txt 0", "vmlinuz 1", "vmlinuz 0",
     ]
-    for name in (*PAYLOADS, "packages.md", "SHA256SUMS"):
+    for name in (*PAYLOADS, "packages.txt", "SHA256SUMS"):
         assert (usb / name).read_bytes() == (server / name).read_bytes()
     assert (usb / "root.squashfs").stat().st_ino == inode
     assert (usb / "persistent-home-file").read_text() == "keep"
-    result = run_update(tmp_path, "", "-y")
+
+
+def test_matching_checksums_exit_without_confirmation(release, tmp_path):
+    usb, server = release
+    for name in (*PAYLOADS, "SHA256SUMS"):
+        (usb / name).write_bytes((server / name).read_bytes())
+
+    result = run_update(tmp_path, "")
     assert result.returncode == 0, result.stderr
     assert "already up to date" in result.stdout
+    assert "Download and install the update?" not in result.stderr
+    assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\n"
     assert not list((tmp_path / "run").glob("rescue-update.*"))
 
 
@@ -132,12 +141,16 @@ def test_failure_preserves_usb(release, tmp_path, scenario, message):
         assert "Downloaded vmlinuz" not in result.stderr
     if scenario == "no-tty":
         assert "-old\n+new" in result.stdout
-        assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\npackages.md 0\n"
+        assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\npackages.txt 0\n"
 
 
 @pytest.mark.parametrize("answer, install", [(b"n\n", False), (b"yes\n", True)])
-def test_interactive_confirmation(release, tmp_path, answer, install):
+@pytest.mark.parametrize("inventories_match", [False, True])
+def test_interactive_confirmation(release, tmp_path, answer, install, inventories_match):
     usb, server = release
+    if inventories_match:
+        (server / "packages.txt").write_bytes((usb / "packages.txt").read_bytes())
+    original = {path.name: path.read_bytes() for path in usb.iterdir()}
     master, terminal = pty.openpty()
     try:
         os.write(master, answer)
@@ -147,10 +160,12 @@ def test_interactive_confirmation(release, tmp_path, answer, install):
         os.close(master)
     assert result.returncode == 0, result.stderr
     assert "Download and install the update?" in result.stderr
-    assert "-old\n+new" in result.stdout
+    preview = "Package inventories match." if inventories_match else "-old\n+new"
+    assert preview in result.stdout
     assert ((usb / "vmlinuz").read_bytes() == (server / "vmlinuz").read_bytes()) == install
     if not install:
-        assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\npackages.md 0\n"
+        assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\npackages.txt 0\n"
+        assert {path.name: path.read_bytes() for path in usb.iterdir()} == original
 
 
 @pytest.mark.parametrize(
@@ -168,7 +183,7 @@ def test_update_source_urls(release, tmp_path, args, base):
     assert "Downloaded vmlinuz (10 bytes in 0.01 s)." in result.stderr
     assert "Verifying checksum for vmlinuz" in result.stderr
     assert all(line.endswith(" 1") for line in (tmp_path / "meters").read_text().splitlines())
-    names = ["SHA256SUMS", "packages.md", "vmlinuz", "vmlinuz"]
+    names = ["SHA256SUMS", "packages.txt", "vmlinuz", "vmlinuz"]
     assert (tmp_path / "urls").read_text().splitlines() == [f"{base}/{name}" for name in names]
 
 

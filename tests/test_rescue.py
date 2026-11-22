@@ -4,6 +4,7 @@ import importlib
 import runpy
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
@@ -165,10 +166,13 @@ def test_cleanup_does_not_publish_image(tmp_path: Path, rescue: ModuleType) -> N
         (modules / name).symlink_to("/usr/src/linux")
     with patch.object(stage, "reset_identity"):
         stage.execute(context)
-    assert (tmp_path / "packages.md").read_text().splitlines()[-2:] == [
-        "| `sys-devel/gcc` | `14.3.0-r1` |",
-        "| `sys-devel/gcc` | `15` |",
-    ]
+    header, blank, *packages = (tmp_path / "packages.txt").read_text().splitlines()
+    assert header.startswith("Build datetime: ")
+    timestamp = header.removeprefix("Build datetime: ")
+    assert timestamp.endswith("Z")
+    datetime.fromisoformat(timestamp)
+    assert blank == ""
+    assert packages == ["sys-devel/gcc 14.3.0-r1", "sys-devel/gcc 15"]
     stage.verify(context)
     assert "image" not in context.artifacts
     assert not any((tmp_path / path).exists() for path in residue)

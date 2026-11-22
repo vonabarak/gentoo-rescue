@@ -148,7 +148,7 @@ async def check_vm(vm, downs):
             f'test "$(findmnt -rn -o FSTYPE,VFS-OPTIONS -M {LOWER} | cut -d, -f1)" = "squashfs ro"'
         )
         await console.command(
-            "test -s /root/packages.md && grep -q '^# Installed packages$' /root/packages.md"
+            "test -s /root/packages.txt && grep -q '^Build datetime: .*Z$' /root/packages.txt"
         )
         if downs < 2:
             assert b"Boot file verification failed." not in console.output
@@ -181,7 +181,8 @@ async def check_ram_update(console):
     await console.command(
         'carrier=$(blkid -L rescue-data) && mkdir -p /tmp/update-carrier && '
         'mount "$carrier" /tmp/update-carrier && '
-        'rm /tmp/update-carrier/vmlinuz /tmp/update-carrier/SHA256SUMS && '
+        'rm /tmp/update-carrier/vmlinuz /tmp/update-carrier/SHA256SUMS '
+        '/tmp/update-carrier/packages.txt && '
         'umount /tmp/update-carrier'
     )
     # Serve the RAM-boot files as a fixture while exercising actual disk mounts.
@@ -201,7 +202,7 @@ async def check_ram_update(console):
         'mount -o ro "$carrier" /tmp/update-carrier && '
         f'cmp {MEDIA}/vmlinuz /tmp/update-carrier/vmlinuz && '
         f'cmp {MEDIA}/SHA256SUMS /tmp/update-carrier/SHA256SUMS && '
-        f'cmp {MEDIA}/packages.md /tmp/update-carrier/packages.md && '
+        f'cmp {MEDIA}/packages.txt /tmp/update-carrier/packages.txt && '
         'test "$(cat /tmp/update-carrier/.boot-test)" = rescue-marker && '
         'test ! -e /tmp/update-carrier/.boot-write-test && '
         '(cd /tmp/update-carrier && sha256sum --check SHA256SUMS) && '
