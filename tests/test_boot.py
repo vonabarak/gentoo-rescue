@@ -192,7 +192,7 @@ async def check_ram_update(console):
         '--output) shift; out=$1 ;; --head) head=1 ;; esac; shift; done; '
         'if (( head )); then printf "Content-Length: %s\\r\\n" '
         '"$(stat -c %s "$UPDATE_FIXTURE/$name")" > "$out"; '
-        'else cp "$UPDATE_FIXTURE/$name" "$out"; fi && printf 200; }; '
+        'else cp "$UPDATE_FIXTURE/$name" "$out"; fi && printf "200 0 0.01"; }; '
         'export -f curl; rescue-update --yes',
         timeout=120,
     )

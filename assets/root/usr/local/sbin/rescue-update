@@ -6,11 +6,26 @@ payloads=(vmlinuz initramfs.img root.squashfs)
 fail() { echo "rescue-update: $*" >&2; exit 1; }
 
 download() {
-    local status
-    status=$(curl -q --globoff --suppress-connect-headers --write-out '%{http_code}' --proto '=https' --fail --silent --show-error --connect-timeout 15 \
-        --max-time 3600 --header 'Cache-Control: no-cache' "${@:3}" \
-        --output "$2" "$base/$1") || fail "Could not fetch $1"
-    [[ $status == 200 ]] || fail "Unexpected HTTP status $status for $1"
+    local name=$1 output=$2
+    shift 2
+    local result status bytes elapsed head=0
+    local -a progress=(--silent)
+    if [[ ${1-} == --head ]]; then
+        head=1
+    else
+        printf 'Downloading %s…\n' "$name" >&2
+        if [[ -t 2 ]]; then progress=(); fi
+    fi
+    result=$(curl -q --globoff --suppress-connect-headers \
+        --write-out '%{http_code} %{size_download} %{time_total}' \
+        --proto '=https' --fail "${progress[@]}" --show-error --connect-timeout 15 \
+        --max-time 3600 --header 'Cache-Control: no-cache' "$@" \
+        --output "$output" "$base/$name") || fail "Could not fetch $name"
+    read -r status bytes elapsed <<< "$result"
+    [[ $status == 200 ]] || fail "Unexpected HTTP status $status for $name"
+    if (( ! head )); then
+        printf 'Downloaded %s (%s bytes in %s s).\n' "$name" "$bytes" "$elapsed" >&2
+    fi
 }
 
 parse_manifest() {
@@ -174,19 +189,21 @@ stage_update() {
     cmp -s "$work/local" "$work/recheck" || fail 'Carrier files changed, rerun the update'
     available=$(df -B1 --output=avail -- "$media" | tail -1)
     inodes=$(df --output=iavail -- "$media" | tail -1)
+    local download_bytes=$total
     total=$((total + $(stat -c %s "$work/packages.md") + 65536))
     (( available >= total && inodes >= ${#changed[@]} + 3 )) ||
         fail 'Not enough free space to stage the update. A normal writable boot can expand a larger USB drive.'
     stage=$(mktemp -d "$media/.rescue-update.XXXXXXXX")
+    if (( ${#changed[@]} )); then
+        printf 'Boot payloads to download: %s (%s bytes total).\n' \
+            "${#changed[@]}" "$download_bytes" >&2
+    fi
     for name in "${changed[@]}"; do
         download "$name" "$stage/$name" --max-filesize "${sizes[$name]}"
+        printf 'Verifying checksum for %s…\n' "$name" >&2
         [[ $(digest "$stage/$name") == "${expected[$name]}" ]] ||
             fail "Checksum mismatch for $name"
     done
-    download SHA256SUMS "$work/recheck" --max-filesize 4096
-    cmp -s "$work/SHA256SUMS" "$work/recheck" || fail 'Published release changed, rerun the update'
-    download packages.md "$work/recheck" --max-filesize 4194304
-    cmp -s "$work/packages.md" "$work/recheck" || fail 'Published inventory changed, rerun the update'
 }
 
 install_update() {

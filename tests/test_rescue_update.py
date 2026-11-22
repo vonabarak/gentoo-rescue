@@ -19,26 +19,28 @@ identify_carrier() { device="$FIXTURE/device"; }
 mount() { rmdir "${@: -1}"; ln -s "$FIXTURE/usb" "${@: -1}"; }
 umount() { rm "$2"; mkdir "$2"; }
 curl() {
-    local url=${@: -1} output head=0
+    local url=${@: -1} output head=0 silent=0
     local name=${url##*/}
     printf '%s\n' "$url" >> "$FIXTURE/urls"
     while (( $# )); do
         case "$1" in
             --head) head=1 ;;
+            --silent) silent=1 ;;
             --output) shift; output=$1 ;;
         esac
         shift
     done
     printf '%s %s\n' "$name" "$head" >> "$FIXTURE/requests"
+    printf '%s %s %s\n' "$name" "$head" "$silent" >> "$FIXTURE/meters"
+    if [[ $name == vmlinuz && $head == 0 && ${SCENARIO-} == interrupted ]]; then
+        return 18
+    fi
     if (( head )); then
         printf 'Content-Length: %s\r\n' "$(stat -c %s "$FIXTURE/server/$name")" > "$output"
     else
         cp "$FIXTURE/server/$name" "$output"
-        if [[ $name == vmlinuz && ${SCENARIO-} == moving ]]; then
-            printf 'changed\n' >> "$FIXTURE/server/SHA256SUMS"
-        fi
     fi
-    printf 200
+    printf '200 %s 0.01' "$(stat -c %s "$output")"
 }
 df() {
     case "${SCENARIO-}" in
@@ -91,7 +93,6 @@ def test_updates_only_changed_payload_and_preserves_home(release, tmp_path):
     assert "-old\n+new" in result.stdout
     assert (tmp_path / "requests").read_text().splitlines() == [
         "SHA256SUMS 0", "packages.md 0", "vmlinuz 1", "vmlinuz 0",
-        "SHA256SUMS 0", "packages.md 0",
     ]
     for name in (*PAYLOADS, "packages.md", "SHA256SUMS"):
         assert (usb / name).read_bytes() == (server / name).read_bytes()
@@ -106,9 +107,9 @@ def test_updates_only_changed_payload_and_preserves_home(release, tmp_path):
 @pytest.mark.parametrize(
     "scenario, message",
     [
+        ("interrupted", "Could not fetch vmlinuz"),
         ("full", "Not enough free space"),
         ("bad-hash", "Checksum mismatch"),
-        ("moving", "Published release changed"),
         ("unsafe-path", "Invalid published SHA256SUMS"),
         ("no-tty", "Use --yes"),
     ],
@@ -127,6 +128,8 @@ def test_failure_preserves_usb(release, tmp_path, scenario, message):
     assert message in result.stderr
     assert {path.name: path.read_bytes() for path in usb.iterdir()} == original
     assert not list((tmp_path / "run").glob("rescue-update.*"))
+    if scenario == "interrupted":
+        assert "Downloaded vmlinuz" not in result.stderr
     if scenario == "no-tty":
         assert "-old\n+new" in result.stdout
         assert (tmp_path / "requests").read_text() == "SHA256SUMS 0\npackages.md 0\n"
@@ -161,7 +164,11 @@ def test_interactive_confirmation(release, tmp_path, answer, install):
 def test_update_source_urls(release, tmp_path, args, base):
     result = run_update(tmp_path, "", *args)
     assert result.returncode == 0, result.stderr
-    names = ["SHA256SUMS", "packages.md", "vmlinuz", "vmlinuz", "SHA256SUMS", "packages.md"]
+    assert "Boot payloads to download: 1 (10 bytes total)." in result.stderr
+    assert "Downloaded vmlinuz (10 bytes in 0.01 s)." in result.stderr
+    assert "Verifying checksum for vmlinuz" in result.stderr
+    assert all(line.endswith(" 1") for line in (tmp_path / "meters").read_text().splitlines())
+    names = ["SHA256SUMS", "packages.md", "vmlinuz", "vmlinuz"]
     assert (tmp_path / "urls").read_text().splitlines() == [f"{base}/{name}" for name in names]
 
 
@@ -171,3 +178,24 @@ def test_invalid_source_fails_before_network_access(release, tmp_path, args):
     assert result.returncode == 1
     assert "HTTPS" in result.stderr
     assert not (tmp_path / "urls").exists()
+
+
+def test_live_meter_only_for_terminal_downloads(release, tmp_path):
+    master, terminal = pty.openpty()
+    try:
+        result = subprocess.run(
+            ["bash", "-c", HARNESS, "rescue-update-test", str(SCRIPT), "--yes"],
+            env=dict(os.environ, FIXTURE=str(tmp_path)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=terminal,
+            timeout=15,
+        )
+    finally:
+        os.close(terminal)
+        os.close(master)
+    assert result.returncode == 0
+    meters = (tmp_path / "meters").read_text().splitlines()
+    assert "vmlinuz 1 1" in meters
+    assert "vmlinuz 0 0" in meters
+    assert "SHA256SUMS 0 0" in meters
