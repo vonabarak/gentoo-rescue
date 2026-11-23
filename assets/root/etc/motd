@@ -1,4 +1,5 @@
 Gentoo rescue: local root console, volatile system, persistent /root when usable.
 Only rescue storage is mounted and expanded automatically. Other disks, swap, RAID and LVM require manual activation.
 To update, boot "Gentoo rescue (copy to RAM)", connect to the network, and run rescue-update.
+To enter a Gentoo installation, run rescue-chroot /dev/DEVICE or mount it at /mnt/gentoo and run rescue-chroot.
 Wired DHCP and SSH are enabled. Configure Wi-Fi using nmtui.

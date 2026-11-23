@@ -161,6 +161,8 @@ async def check_vm(vm, downs):
                 '! rescue-update --yes > /tmp/update-error 2>&1 && '
                 "grep -Fq 'Boot using Gentoo rescue (copy to RAM)' /tmp/update-error"
             )
+            if downs == 0:
+                await check_rescue_chroot(console)
         else:
             await console.command(
                 "grep -qw 'corvus.rescue.ram=1' /proc/cmdline && "
@@ -175,6 +177,40 @@ async def check_vm(vm, downs):
                 "touch /root/.boot-write-test"
             )
             await check_ram_update(console)
+
+
+async def check_rescue_chroot(console):
+    await console.command(
+        r'''set -e
+work=$(mktemp -d)
+loop=
+cleanup_chroot_test() {
+    if mountpoint -q /mnt/gentoo; then umount /mnt/gentoo; fi
+    if [ -n "$loop" ]; then losetup -d "$loop"; fi
+    rm -rf "$work"
+}
+trap cleanup_chroot_test EXIT
+truncate -s 64M "$work/root.img"
+loop=$(losetup --find --show "$work/root.img")
+mkfs.ext4 -q "$loop"
+mkdir -p /mnt/gentoo
+mount "$loop" /mnt/gentoo
+mkdir /mnt/gentoo/{proc,sys,dev,root}
+ldd /bin/bash | awk '{for (i=1; i<=NF; i++) if ($i ~ /^\//) print $i}' > "$work/libs"
+cp -L --parents /bin/bash /mnt/gentoo
+while read -r lib; do cp -L --parents "$lib" /mnt/gentoo; done < "$work/libs"
+printf 'chroot fixture\n' > /mnt/gentoo/marker
+check='[[ -f /marker && -r /proc/self/status && -d /sys/class && -c /dev/pts/ptmx ]]'
+printf '%s\n' "$check" | rescue-chroot
+mountpoint -q /mnt/gentoo
+for dir in proc sys dev; do
+    if mountpoint -q "/mnt/gentoo/$dir"; then exit 1; fi
+done
+umount /mnt/gentoo
+printf '%s\n' "$check" | rescue-chroot "$loop"
+if mountpoint -q /mnt/gentoo; then exit 1; fi''',
+        timeout=60,
+    )
 
 
 async def check_ram_update(console):

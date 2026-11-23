@@ -34,7 +34,6 @@ ATOMS = (
     "sys-apps/ripgrep",
     "app-shells/fzf",
     "sys-libs/gpm",
-    "sys-kernel/gentoo-kernel-bin",
     "sys-kernel/linux-firmware",
     "sys-kernel/dracut",
     "sys-fs/growpart",
@@ -126,6 +125,7 @@ RUNTIME_PATHS = (
     "etc/mdadm.conf",
     "usr/local/sbin/rescue-home",
     "usr/local/sbin/rescue-update",
+    "usr/local/sbin/rescue-chroot",
     "usr/local/sbin/rescue-grow",
 )
 KERNEL_PATHS = (
@@ -176,6 +176,12 @@ class RescueRepositoryStage(RepositoryStage):
         )
         super().execute(context)
         install_portage_policy(Path("/"))
+        mask = Path("/etc/portage/package.mask/zz-rescue-kernel")
+        mask.parent.mkdir(parents=True, exist_ok=True)
+        mask.write_text(
+            "<sys-kernel/gentoo-sources-6.18\n"
+            ">=sys-kernel/gentoo-sources-6.19_rc0\n"
+        )
         os.environ["ACCEPT_KEYWORDS"] = "amd64"
 
 
@@ -195,7 +201,6 @@ class RescueDiskStage(GentooStage):
             "mkfs.vfat",
             "mkfs.ext4",
             "blkid",
-            "sort",
         ):
             if not shutil.which(tool):
                 raise ValueError(f"Missing rescue builder tool: {tool}")
@@ -228,6 +233,7 @@ class RescueDiskStage(GentooStage):
         )
         mounts = Mounts(self, context)
         mounts.mount(context.root, "-t", "tmpfs", "-o", "size=16G,mode=0755", "tmpfs")
+        (context.root / "boot").mkdir()
         # Media lives beneath the staging root, but outside its packed filesystem view.
         media, esp = context.root / ".rescue-media", context.root / ".rescue-esp"
         mounts.mount(media, prefix + "3")
@@ -237,7 +243,7 @@ class RescueDiskStage(GentooStage):
 
 
 class RescuePackagesStage(GlibcPackageInstallStage):
-    """Bootstrap glibc and install stable rescue packages and distribution kernel."""
+    """Bootstrap glibc and install stable rescue packages."""
 
     bootstrap_atoms = (
         "sys-apps/baselayout",
@@ -286,7 +292,12 @@ class RescuePackagesStage(GlibcPackageInstallStage):
     )
 
     def execute(self, context: BuildContext) -> None:
-        self.packages(context, ("sys-fs/squashfs-tools",), native=True)
+        self.packages(
+            context,
+            ("sys-fs/squashfs-tools", "dev-libs/openssl", "dev-util/pahole"),
+            native=True,
+            noreplace=True,
+        )
         super().execute(context)
         PortageBackend(context.runner, context.root).install(
             InstallRequest(
@@ -404,22 +415,21 @@ class RescueRuntimeStage(GentooStage):
 class RescueKernelStage(GentooStage):
     """Generate and verify hardware-generic boot and userspace shutdown archives."""
 
-    requires = frozenset({"configured"})
+    requires = frozenset({"configured", "kernel"})
     produces = frozenset({"kernel"})
 
     def execute(self, context: BuildContext) -> None:
         root = context.root
-        versions = [p.name for p in (root / "lib/modules").iterdir() if p.is_dir()]
-        if not versions:
-            raise ValueError("Distribution kernel did not install modules")
-        # sort -V handles Gentoo kernel release suffixes and numerical versions.
-        kernel = subprocess.check_output(
-            ["sort", "-V"], input="\n".join(versions), text=True
-        ).splitlines()[-1]
+        image = str(context.artifacts["kernel"])
+        if not image.startswith("vmlinuz-"):
+            raise ValueError("Missing Corvus kernel image")
+        kernel = image.removeprefix("vmlinuz-")
         validate_kernel(kernel)
         config = root / f"boot/config-{kernel}"
-        if not config.exists():
-            config = root / f"usr/src/linux-{kernel}/.config"
+        if not (root / "boot" / image).is_file() or not (
+            root / "lib/modules" / kernel / "modules.builtin"
+        ).is_file():
+            raise ValueError(f"Incomplete kernel installation for {kernel}")
         options = config.read_text().splitlines()
         for option in [
             "BLK_DEV_INITRD",
@@ -438,6 +448,9 @@ class RescueKernelStage(GentooStage):
             "SQUASHFS_XZ",
             "EFI",
             "EFI_PARTITION",
+            "USB_CDNS3",
+            "USB_CDNS3_HOST",
+            "USB_CDNS3_PCI_WRAP",
             "USB_XHCI_HCD",
             "USB_STORAGE",
             "USB_UAS",
@@ -457,12 +470,7 @@ class RescueKernelStage(GentooStage):
             "ATH9K",
         ]:
             if not any(f"CONFIG_{option}={mode}" in options for mode in ("y", "m")):
-                raise ValueError(f"Distribution kernel lacks CONFIG_{option}")
-        image = root / f"boot/vmlinuz-{kernel}"
-        if not image.exists():
-            shutil.copyfile(
-                root / f"usr/src/linux-{kernel}/arch/x86/boot/bzImage", image
-            )
+                raise ValueError(f"Rescue kernel lacks CONFIG_{option}")
         self.chroot_string(context, f"depmod -a {kernel}")
         for path in KERNEL_PATHS:
             mode = 0o755 if path.endswith(".sh") else 0o644
@@ -490,6 +498,7 @@ class RescueKernelStage(GentooStage):
             if name not in listing:
                 raise ValueError(f"Initramfs lacks {name}")
         for module in [
+            "cdns3-pci-wrap",
             "xhci_pci",
             "usb_storage",
             "uas",

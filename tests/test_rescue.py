@@ -70,7 +70,9 @@ def test_rescue_plan_and_recipe(tmp_path: Path, rescue: ModuleType) -> None:
         script["build_recipe"](Settings(Path("/dev/vdb"), tmp_path, None)), context
     )
     assert (
-        names.index("RescueCleanupStage")
+        names.index("KernelStage")
+        < names.index("RescueKernelStage")
+        < names.index("RescueCleanupStage")
         < names.index("RescuePackStage")
         < names.index("RescueBootloaderStage")
     )
@@ -192,6 +194,7 @@ def test_rescue_assets_are_validated_and_installed(
     stage.execute(context)
     for name, mode in (
         ("usr/local/sbin/rescue-home", 0o755),
+        ("usr/local/sbin/rescue-chroot", 0o755),
         ("usr/local/sbin/rescue-network-state", 0o755),
         ("etc/tmux.conf", 0o644),
         ("etc/vconsole.conf", 0o644),

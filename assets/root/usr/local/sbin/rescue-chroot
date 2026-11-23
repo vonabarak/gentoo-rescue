@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euo pipefail
+
+usage='Usage: rescue-chroot [/dev/DEVICE]'
+fail() { printf 'rescue-chroot: %s\n' "$*" >&2; exit 1; }
+
+enter_target() {
+    local root=/mnt/gentoo device=${1-} name target
+    [[ $(realpath -m -- "$root") == "$root" ]] || fail "Symlink in $root"
+    if [[ -n $device ]]; then
+        ! mountpoint -q -- "$root" || fail "$root is already mounted. Run rescue-chroot without a device."
+        mkdir -p -- "$root"
+        mount -o rw -- "$device" "$root" || fail "Could not mount $device"
+    else
+        mountpoint -q -- "$root" || fail "Mount a Gentoo root at $root or specify a block device"
+    fi
+
+    [[ -x $root/bin/bash ]] || fail "Install or extract Gentoo at $root first"
+    for name in proc sys dev; do
+        target=$root/$name
+        [[ -d $target && ! -L $target ]] || fail "Expected a real directory at $target"
+        ! mountpoint -q -- "$target" || fail "$target is already mounted"
+    done
+    mount -t proc proc "$root/proc"
+    mount --rbind /sys "$root/sys"
+    mount --rbind /dev "$root/dev"
+    exec chroot "$root" /bin/bash --login
+}
+
+if [[ $# == 1 && ( $1 == --help || $1 == -h ) ]]; then
+    printf '%s\n' "$usage"
+    exit 0
+fi
+(( $# <= 1 )) || fail "$usage"
+(( EUID == 0 )) || fail 'Run as root'
+if (( $# )); then
+    [[ -b $1 ]] || fail "Not a block device: $1"
+    set -- "$(realpath -e -- "$1")"
+fi
+
+# Keep the caller's terminal while giving the helper its own mount namespace.
+exec unshare --mount --propagation private -- /bin/bash -c "
+set -euo pipefail
+$(declare -f fail enter_target)
+enter_target \"\$@\"
+" rescue-chroot "$@"

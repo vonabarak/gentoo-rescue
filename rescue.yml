@@ -57,6 +57,7 @@ pipeline:
         TARGET_DISK: /dev/vdb
         RESCUE_MEDIA: /mnt/rescue-media
         RESCUE_ESP: /mnt/rescue-esp
+        INSTALL_MOD_STRIP: '1'
         FEATURES: -userfetch -userpriv
     provisioners:
     - file:

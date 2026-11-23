@@ -4,10 +4,12 @@ from pathlib import Path
 from corvus_image_builder.core import BuildContext, BuildManager, ImageRecipe
 from corvus_image_builder.gentoo import (
     ChrootEnvironmentStage,
+    KernelStage,
     Settings,
     WorkspaceStage,
 )
 from rescue_stages import (
+    ASSETS,
     RescueBootloaderStage,
     RescueCleanupStage,
     RescueDiskStage,
@@ -23,19 +25,17 @@ def build_recipe(settings: Settings) -> ImageRecipe:
     """Compose the RAM-staged removable rescue disk build."""
     return ImageRecipe(
         [
-            stage(settings)
-            for stage in (
-                WorkspaceStage,
-                RescueRepositoryStage,
-                RescueDiskStage,
-                ChrootEnvironmentStage,
-                RescuePackagesStage,
-                RescueRuntimeStage,
-                RescueKernelStage,
-                RescueCleanupStage,
-                RescuePackStage,
-                RescueBootloaderStage,
-            )
+            WorkspaceStage(settings),
+            RescueRepositoryStage(settings),
+            RescueDiskStage(settings),
+            ChrootEnvironmentStage(settings),
+            RescuePackagesStage(settings),
+            RescueRuntimeStage(settings),
+            KernelStage(settings, cache_prefix="gentoo-rescue"),
+            RescueKernelStage(settings),
+            RescueCleanupStage(settings),
+            RescuePackStage(settings),
+            RescueBootloaderStage(settings),
         ]
     )
 
@@ -45,7 +45,7 @@ if __name__ == "__main__":
         name="gentoo-rescue",
         disk=Path(os.environ.get("TARGET_DISK", "/dev/vdb")),
         cache=Path(os.environ.get("IMAGE_CACHE", "/mnt/corvus-cache")),
-        kernel_config=None,
+        kernel_config=ASSETS / "kernel/rescue-amd64.config",
         use_binary=os.environ.get("USEPKG", "true") == "true",
         fetch_binary=os.environ.get("GETBINPKG", "true") == "true",
     )

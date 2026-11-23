@@ -1,5 +1,4 @@
-sys-kernel/gentoo-kernel-bin -initramfs
-sys-kernel/linux-firmware -savedconfig
+sys-kernel/linux-firmware -savedconfig -dist-kernel
 sys-kernel/installkernel -dracut -grub -systemd
 sys-kernel/dracut systemd
 sys-fs/squashfs-tools lzma zstd xattr

@@ -48,10 +48,17 @@ see the Portage verification section in the Corvus image guide. Unsigned locally
 packages remain usable in the trusted shared cache.
 
 The registered glibc/systemd builder provides native tools and caches. Rescue
-uses the Gentoo distribution binary kernel, its complete modules, linux-firmware,
-and a generic, non-hostonly dracut initramfs. It does not use the VM-only kernel
-used by other Corvus Gentoo images. The recipe checks required hardware options,
-boot drivers, and squashfs/OverlayFS support before publication.
+builds the latest stable amd64 Gentoo sources in the 6.18 series using the full
+configuration in `assets/kernel/rescue-amd64.config`. It includes linux-firmware
+and a generic, non-hostonly dracut initramfs. The recipe checks required hardware
+options, boot drivers, and SquashFS/OverlayFS support before publication.
+The configuration starts from Gentoo's 6.18 amd64 distribution kernel and
+enables drivers also found in the LiveCD, including Cadence USB3 PCI and GPIB.
+
+The build requires a Corvus Python package whose `KernelStage` accepts the
+`cache_prefix` argument. Rescue archives are stored in `kernels/glibc-systemd` under
+the shared cache with filenames beginning with `gentoo-rescue-`. The filename
+includes the source version and the configuration SHA-256.
 
 `build.py` composes the stages in `rescue_stages.py` with the shared builder
 stages. The bundle includes the recipe-local module. The YAML uploads
@@ -240,6 +247,18 @@ sudo make usb-write DEVICE=/dev/disk/by-id/usb-…
 All files on the drive will be replaced. Press Ctrl+C during the 10-second
 countdown to cancel. The command reads the written image back to verify it.
 The first writable boot expands storage to use the remaining device capacity.
+
+## Enter a Gentoo installation
+
+Run `rescue-chroot /dev/DEVICE` as root to mount a Gentoo root filesystem at
+`/mnt/gentoo` and enter it. For a fresh installation, mount the target and
+extract stage3 first. If you need a specific subvolume or a separate `/usr`,
+mount those before running `rescue-chroot` without arguments. Activate or
+unlock any required storage first and configure DNS in the target if needed.
+
+The helper makes `/proc`, `/sys`, and `/dev` available in the chroot. Its mounts
+are private to the session and disappear when it ends. Mounts you prepared
+before running the helper remain in place.
 
 ## Update from a RAM boot
 
